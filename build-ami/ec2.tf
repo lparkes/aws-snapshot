@@ -55,45 +55,45 @@ resource "aws_launch_template" "netbsd-ami" {
   }
 }
 
-resource "aws_autoscaling_group" "netbsd-ami" {
-  name                      = "netbsd-ami-builders"
-  max_size                  = 1
-  min_size                  = 0
-  health_check_grace_period = 300 # Shorten this ???
-  health_check_type         = "EC2"
-  vpc_zone_identifier       = [aws_subnet.example1.id, aws_subnet.example2.id]
+# resource "aws_autoscaling_group" "netbsd-ami" {
+#   name                      = "netbsd-ami-builders"
+#   max_size                  = 1
+#   min_size                  = 0
+#   health_check_grace_period = 300 # Shorten this ???
+#   health_check_type         = "EC2"
+#   vpc_zone_identifier       = [aws_subnet.example1.id, aws_subnet.example2.id]
 
-  launch_template {
-    id = aws_launch_template.netbsd-ami.id
-  }
+#   launch_template {
+#     id = aws_launch_template.netbsd-ami.id
+#   }
 
-  initial_lifecycle_hook {
-    name                 = "foobar"
-    default_result       = "CONTINUE"
-    heartbeat_timeout    = 2000
-    lifecycle_transition = "autoscaling:EC2_INSTANCE_LAUNCHING"
+#   initial_lifecycle_hook {
+#     name                 = "foobar"
+#     default_result       = "CONTINUE"
+#     heartbeat_timeout    = 2000
+#     lifecycle_transition = "autoscaling:EC2_INSTANCE_LAUNCHING"
 
-    notification_metadata = jsonencode({
-      foo = "bar"
-    })
+#     notification_metadata = jsonencode({
+#       foo = "bar"
+#     })
 
-    notification_target_arn = "arn:aws:sqs:us-east-1:444455556666:queue1*"
-    role_arn                = "arn:aws:iam::123456789012:role/S3Access"
-  }
+#     notification_target_arn = "arn:aws:sqs:us-east-1:444455556666:queue1*"
+#     role_arn                = "arn:aws:iam::123456789012:role/S3Access"
+#   }
 
-  tag {
-    key                 = "foo"
-    value               = "bar"
-    propagate_at_launch = true
-  }
+#   tag {
+#     key                 = "foo"
+#     value               = "bar"
+#     propagate_at_launch = true
+#   }
 
-  timeouts {
-    delete = "15m"
-  }
+#   timeouts {
+#     delete = "15m"
+#   }
 
-  tag {
-    key                 = "lorem"
-    value               = "ipsum"
-    propagate_at_launch = false
-  }
-}
+#   tag {
+#     key                 = "lorem"
+#     value               = "ipsum"
+#     propagate_at_launch = false
+#   }
+# }

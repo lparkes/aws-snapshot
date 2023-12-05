@@ -11,7 +11,7 @@ provider "aws" {
   default_tags {
     tags = {
       Owner        = "Lloyd Parkes"
-      IaC-Source   = "ssh://github.com/lparkes/netbsd-aws"
+      IaC-Source   = "terraform:ssh://github.com/lparkes/netbsd-aws"
       #Cost-Centre = ""
     }
 }

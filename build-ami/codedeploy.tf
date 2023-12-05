@@ -21,21 +21,21 @@ resource "aws_codedeploy_deployment_group" "netbsd-ami" {
     }
   }
 
-  trigger_configuration {
-    trigger_events     = ["DeploymentFailure"]
-    trigger_name       = "example-trigger"
-    trigger_target_arn = aws_sns_topic.example.arn
-  }
+  # trigger_configuration {
+  #   trigger_events     = ["DeploymentFailure"]
+  #   trigger_name       = "example-trigger"
+  #   trigger_target_arn = aws_sns_topic.example.arn
+  # }
 
-  auto_rollback_configuration {
-    enabled = true
-    events  = ["DEPLOYMENT_FAILURE"]
-  }
+  # auto_rollback_configuration {
+  #   enabled = true
+  #   events  = ["DEPLOYMENT_FAILURE"]
+  # }
 
-  alarm_configuration {
-    alarms  = ["my-alarm-name"]
-    enabled = true
-  }
+  # alarm_configuration {
+  #   alarms  = ["my-alarm-name"]
+  #   enabled = true
+  # }
 
-  outdated_instances_strategy = "UPDATE"
+  # outdated_instances_strategy = "UPDATE"
 }
