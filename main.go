@@ -12,12 +12,9 @@ import (
 	"math/rand"
 	"os"
 	"sync"
-	//"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	//"github.com/aws/aws-sdk-go-v2/aws/awserr"
-	//"github.com/aws/aws-sdk-go-v2/aws/session"
 	"github.com/aws/aws-sdk-go-v2/service/ebs"
 	"github.com/aws/aws-sdk-go-v2/service/ebs/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -31,16 +28,15 @@ import (
 // knowledge of the name of the checksum algorithm from the code that
 // calculate the checksum seems unwise.
 type Block struct {
-	// Constant across all blocks
-
-	ChecksumAlgorithm string
+	ChecksumAlgorithm types.ChecksumAlgorithm
+	SnapshotId        string
 
 	// Variable across all blocks
 
 	BlockData  []byte
 	BlockIndex int32
-	Checksum   string
-	Progress   int32 // The only optional field
+	Checksum   []byte
+	//Progress   int32 // The only optional field
 }
 
 const GiB = 1024 * 1024 * 1024
@@ -70,8 +66,8 @@ func main() {
 
 	// Configure all out channels
 	blockNums := make(chan int32)
-	unwrittenBlocks := make(chan *ebs.PutSnapshotBlockInput, 10)
-	writtenBlocks := make(chan *ebs.PutSnapshotBlockInput)
+	unwrittenBlocks := make(chan *Block, 10)
+	writtenBlocks := make(chan *Block)
 
 	// Setup the local side of things.
 	filename := flag.Arg(0)
@@ -170,7 +166,7 @@ func EnumerateBlocks(blockNums chan<- int32, blockSize int32, fileSize int64) {
 
 // BuildBlocks reads numbered blocks from f.
 // The blocks channel is closed by BuildBlocks before it returns.
-func BuildBlocks(blockNums <-chan int32, blocks chan<- *ebs.PutSnapshotBlockInput,
+func BuildBlocks(blockNums <-chan int32, blocks chan<- *Block,
 	f io.ReaderAt, sso *ebs.StartSnapshotOutput) {
 
 	blockSize := aws.ToInt32(sso.BlockSize)
@@ -187,13 +183,12 @@ func BuildBlocks(blockNums <-chan int32, blocks chan<- *ebs.PutSnapshotBlockInpu
 
 		sum := sha256.Sum256(blockData)
 
-		b := &ebs.PutSnapshotBlockInput{
-			BlockData:         bytes.NewReader(blockData),
-			BlockIndex:        aws.Int32(i),
-			Checksum:          aws.String(base64.StdEncoding.EncodeToString(sum[:])),
+		b := &Block{
+			BlockData:         blockData,
+			BlockIndex:        i,
+			Checksum:          sum[:],
 			ChecksumAlgorithm: SHA256,
-			DataLength:        sso.BlockSize,
-			SnapshotId:        sso.SnapshotId,
+			SnapshotId:        aws.ToString(sso.SnapshotId),
 		}
 
 		blocks <- b
@@ -205,14 +200,23 @@ func BuildBlocks(blockNums <-chan int32, blocks chan<- *ebs.PutSnapshotBlockInpu
 
 // WriteSnapshotBlocks writes snapshot blocks to the snapshot and then
 // sends the blocks onwards for checksum aggregation.
-func WriteSnapshotBlocks(svc *ebs.Client, blocksIn <-chan *ebs.PutSnapshotBlockInput, blocksDone chan<- *ebs.PutSnapshotBlockInput, wg *sync.WaitGroup) {
+func WriteSnapshotBlocks(svc *ebs.Client, blocksIn <-chan *Block, blocksDone chan<- *Block, wg *sync.WaitGroup) {
 	ctx := context.TODO()
 
 	for b := range blocksIn {
 
-		debug.Println("Writing block", aws.ToInt32(b.BlockIndex))
+		debug.Println("Writing block", b.BlockIndex)
 
-		_, err := svc.PutSnapshotBlock(ctx, b)
+		pbsi := ebs.PutSnapshotBlockInput{
+			BlockData:         bytes.NewReader(b.BlockData),
+			BlockIndex:        aws.Int32(b.BlockIndex),
+			Checksum:          aws.String(base64.StdEncoding.EncodeToString(b.Checksum)),
+			ChecksumAlgorithm: b.ChecksumAlgorithm,
+			DataLength:        aws.Int32(int32(len(b.BlockData))),
+			SnapshotId:        aws.String(b.SnapshotId),
+		}
+
+		_, err := svc.PutSnapshotBlock(ctx, &pbsi)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -222,7 +226,7 @@ func WriteSnapshotBlocks(svc *ebs.Client, blocksIn <-chan *ebs.PutSnapshotBlockI
 	wg.Done()
 }
 
-func LaunchBlockWriters(svc *ebs.Client, blocksIn <-chan *ebs.PutSnapshotBlockInput, blocksDone chan<- *ebs.PutSnapshotBlockInput, nWriters int) {
+func LaunchBlockWriters(svc *ebs.Client, blocksIn <-chan *Block, blocksDone chan<- *Block, nWriters int) {
 	wg := &sync.WaitGroup{}
 
 	debug.Println("Launching", nWriters, "writers")
@@ -241,35 +245,35 @@ func LaunchBlockWriters(svc *ebs.Client, blocksIn <-chan *ebs.PutSnapshotBlockIn
 // SnapshotFinisher summarises the list of blocks that have been
 // written to the snapshot and uses that summary to complete the
 // snapshot.
-func SnapshotFinisher(svc *ebs.Client, blocks <-chan *ebs.PutSnapshotBlockInput, snapshotId string) {
+func SnapshotFinisher(svc *ebs.Client, blocks <-chan *Block, snapshotId string) {
 	var blockCount int32
 
 	// The checksum aggregations need to be in order, so keep
 	// track of where we are up to and make a place to store any
 	// checksums we aren't ready for.
 	nextCsumBlock := int32(0) // Same type as blockCount
-	pendingCsums := make(map[int32]string)
+	pendingCsums := make(map[int32][]byte)
 	aggregateCsum := sha256.New()
 
 	for b := range blocks {
 		blockCount += 1
-		blockIndex := aws.ToInt32(b.BlockIndex)
-		pendingCsums[blockIndex] = aws.ToString(b.Checksum)
+		blockIndex := b.BlockIndex
+		pendingCsums[blockIndex] = b.Checksum
 		for {
 			sum, found := pendingCsums[nextCsumBlock]
 			if !found {
 				break
 			}
 			delete(pendingCsums, nextCsumBlock)
-			aggregateCsum.Write([]byte(sum))
+			aggregateCsum.Write(sum)
 			nextCsumBlock += 1
 		}
 	}
 
 	csi := ebs.CompleteSnapshotInput{
-		SnapshotId:         aws.String(snapshotId),
-		ChangedBlocksCount: aws.Int32(blockCount),
-		//Checksum:                  AwsBase64(aggregateCsum.Sum(nil)),
+		SnapshotId:                aws.String(snapshotId),
+		ChangedBlocksCount:        aws.Int32(blockCount),
+		Checksum:                  AwsBase64(aggregateCsum.Sum(nil)),
 		ChecksumAggregationMethod: LINEAR,
 		ChecksumAlgorithm:         SHA256,
 	}
