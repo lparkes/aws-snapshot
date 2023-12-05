@@ -1,8 +1,0 @@
-Things to do.
-
-* Build NetBSD images into local files.
-* Upload local files into S3.
-* Use AWS CodeDeploy to turn an S3 object into an AMI.
-  * Create and EC2 Spot Instance (cheapest architecture)
-  * Use CodeDeploy
-  * Terminate the instance
